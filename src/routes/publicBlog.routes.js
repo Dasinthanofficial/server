@@ -15,21 +15,12 @@ router.get("/latest", async (req, res) => {
   res.json({ posts });
 });
 
-// GET /api/blog?page=1&limit=9&search=&category=
+// GET /api/blog?page=1&limit=9
 router.get("/", async (req, res) => {
   const page = Math.max(parseInt(req.query.page || "1", 10), 1);
   const limit = Math.min(Math.max(parseInt(req.query.limit || "9", 10), 1), 30);
-  const search = (req.query.search || "").trim();
-  const category = (req.query.category || "").trim();
 
   const filter = { status: "published" };
-  if (category) filter.category = category;
-  if (search) {
-    filter.$or = [
-      { title: { $regex: search, $options: "i" } },
-      { excerpt: { $regex: search, $options: "i" } }
-    ];
-  }
 
   const total = await BlogPost.countDocuments(filter);
   const posts = await BlogPost.find(filter)
@@ -43,8 +34,13 @@ router.get("/", async (req, res) => {
 
 // GET /api/blog/:slug
 router.get("/:slug", async (req, res) => {
-  const post = await BlogPost.findOne({ slug: req.params.slug, status: "published" }).lean();
+  const post = await BlogPost.findOne({
+    slug: req.params.slug,
+    status: "published",
+  }).lean();
+
   if (!post) return res.status(404).json({ message: "Post not found" });
+
   res.json({ post });
 });
 

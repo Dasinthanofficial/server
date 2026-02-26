@@ -9,6 +9,7 @@ import { initCloudinary } from "./config/cloudinary.js";
 
 import publicBlogRoutes from "./routes/publicBlog.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
+import { HeroSlide } from "./models/HeroSlide.js";
 
 const app = express();
 
@@ -24,6 +25,15 @@ app.use(
 );
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+// ✅ PUBLIC HERO ENDPOINT (MUST BE HERE)
+app.get("/api/hero", async (req, res) => {
+  const slides = await HeroSlide.find({ active: true })
+    .sort({ order: 1 })
+    .lean();
+
+  res.json({ slides });
+});
 
 app.use("/api/blog", publicBlogRoutes);
 app.use("/api/admin", adminRoutes);

@@ -9,6 +9,8 @@ import { BlogPost } from "../models/BlogPost.js";
 import { makeSlug } from "../utils/slug.js";
 import { v2 as cloudinary } from "cloudinary";
 
+import { HeroSlide } from "../models/HeroSlide.js";
+
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -140,6 +142,44 @@ router.post("/upload", authAdmin, upload.single("file"), async (req, res) => {
       height: result.height
     }
   });
+});
+
+
+// GET /api/admin/hero
+router.get("/hero", authAdmin, async (req, res) => {
+  const slides = await HeroSlide.find().sort({ order: 1 }).lean();
+  res.json({ slides });
+});
+
+// POST /api/admin/hero
+router.post("/hero", authAdmin, async (req, res) => {
+  const { image } = req.body;
+  if (!image?.url) return res.status(400).json({ message: "Image required" });
+
+  const count = await HeroSlide.countDocuments();
+
+  const slide = await HeroSlide.create({
+    image,
+    order: count,
+  });
+
+  res.status(201).json({ slide });
+});
+
+
+// DELETE /api/admin/hero/:id
+router.delete("/hero/:id", authAdmin, async (req, res) => {
+  const slide = await HeroSlide.findById(req.params.id);
+  if (!slide) return res.status(404).json({ message: "Not found" });
+
+  if (slide.image?.publicId) {
+    try {
+      await cloudinary.uploader.destroy(slide.image.publicId);
+    } catch {}
+  }
+
+  await slide.deleteOne();
+  res.json({ ok: true });
 });
 
 export default router;
