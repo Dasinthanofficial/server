@@ -10,12 +10,13 @@ import { BlogPost } from "../models/BlogPost.js";
 import { HeroSlide } from "../models/HeroSlide.js";
 import { makeSlug } from "../utils/slug.js";
 
+import { Partner } from "../models/Partner.js";
+
 const router = Router();
 
 /* ================= MULTER CONFIG ================= */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // ✅ 5MB limit
 });
 
 /* ================= LOGIN RATE LIMIT ================= */
@@ -250,5 +251,45 @@ router.delete("/hero/:id", authAdmin, async (req, res) => {
     res.status(500).json({ message: "Failed to delete hero slide" });
   }
 });
+
+
+router.get("/partners", authAdmin, async (req, res) => {
+  const partners = await Partner.find().sort({ order: 1 }).lean();
+  res.json({ partners });
+});
+
+router.post("/partners", authAdmin, async (req, res) => {
+  const { name, logo, website } = req.body;
+
+  if (!name || !logo?.url)
+    return res.status(400).json({ message: "Name and logo required" });
+
+  const count = await Partner.countDocuments();
+
+  const partner = await Partner.create({
+    name,
+    logo,
+    website,
+    order: count,
+  });
+
+  res.status(201).json({ partner });
+});
+
+router.delete("/partners/:id", authAdmin, async (req, res) => {
+  const partner = await Partner.findById(req.params.id);
+  if (!partner) return res.status(404).json({ message: "Not found" });
+
+  if (partner.logo?.publicId) {
+    try {
+      await cloudinary.uploader.destroy(partner.logo.publicId);
+    } catch {}
+  }
+
+  await partner.deleteOne();
+  res.json({ ok: true });
+});
+
+
 
 export default router;

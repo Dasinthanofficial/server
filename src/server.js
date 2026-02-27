@@ -11,6 +11,8 @@ import publicBlogRoutes from "./routes/publicBlog.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import { HeroSlide } from "./models/HeroSlide.js";
 
+import { Partner } from "./models/Partner.js";
+
 const app = express();
 
 app.use(helmet());
@@ -41,6 +43,14 @@ app.use("/api/admin", adminRoutes);
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ message: "Server error" });
+});
+
+app.get("/api/partners", async (req, res) => {
+  const partners = await Partner.find({ active: true })
+    .sort({ order: 1 })
+    .lean();
+
+  res.json({ partners });
 });
 
 const port = process.env.PORT || 8080;
