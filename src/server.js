@@ -10,7 +10,6 @@ import { initCloudinary } from "./config/cloudinary.js";
 import publicBlogRoutes from "./routes/publicBlog.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import { HeroSlide } from "./models/HeroSlide.js";
-
 import { Partner } from "./models/Partner.js";
 
 const app = express();
@@ -22,35 +21,48 @@ app.use(morgan("dev"));
 app.use(
   cors({
     origin: process.env.CLIENT_ORIGIN,
-    credentials: false
+    credentials: false,
   })
 );
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// ✅ PUBLIC HERO ENDPOINT (MUST BE HERE)
+/* ================= PUBLIC HERO ================= */
 app.get("/api/hero", async (req, res) => {
-  const slides = await HeroSlide.find({ active: true })
-    .sort({ order: 1 })
-    .lean();
+  try {
+    const slides = await HeroSlide.find({ active: true })
+      .sort({ order: 1 })
+      .lean();
 
-  res.json({ slides });
+    res.json({ slides });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch hero slides" });
+  }
 });
 
+/* ✅ PUBLIC PARTNERS ROUTE (MOVED ABOVE ERROR HANDLER) */
+app.get("/api/partners", async (req, res) => {
+  try {
+    const partners = await Partner.find({ active: true })
+      .sort({ order: 1 })
+      .lean();
+
+    res.json({ partners });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch partners" });
+  }
+});
+
+/* ================= ROUTES ================= */
 app.use("/api/blog", publicBlogRoutes);
 app.use("/api/admin", adminRoutes);
 
+/* ================= ERROR HANDLER ================= */
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ message: "Server error" });
-});
-
-app.get("/api/partners", async (req, res) => {
-  const partners = await Partner.find({ active: true })
-    .sort({ order: 1 })
-    .lean();
-
-  res.json({ partners });
 });
 
 const port = process.env.PORT || 8080;
