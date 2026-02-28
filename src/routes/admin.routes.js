@@ -11,6 +11,8 @@ import { HeroSlide } from "../models/HeroSlide.js";
 import { makeSlug } from "../utils/slug.js";
 
 import { Partner } from "../models/Partner.js";
+import { AnnualReport } from "../models/AnnualReport.js";
+
 
 const router = Router();
 
@@ -289,6 +291,60 @@ router.delete("/partners/:id", authAdmin, async (req, res) => {
   await partner.deleteOne();
   res.json({ ok: true });
 });
+
+router.get("/reports", authAdmin, async (req, res) => {
+  try {
+    const reports = await AnnualReport.find()
+      .sort({ order: 1 })
+      .lean();
+
+    res.json({ reports });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch reports" });
+  }
+});
+
+router.post("/reports", authAdmin, async (req, res) => {
+  try {
+    const { title, year, coverImage, flipbookUrl } = req.body;
+
+    if (!title || !year || !flipbookUrl || !coverImage?.url) {
+      return res.status(400).json({ message: "All fields required" });
+    }
+
+    const count = await AnnualReport.countDocuments();
+
+    const report = await AnnualReport.create({
+      title,
+      year,
+      coverImage,
+      flipbookUrl,
+      order: count,
+    });
+
+    res.status(201).json({ report });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to create report" });
+  }
+});
+
+router.delete("/reports/:id", authAdmin, async (req, res) => {
+  try {
+    const report = await AnnualReport.findById(req.params.id);
+    if (!report) return res.status(404).json({ message: "Not found" });
+
+    if (report.coverImage?.publicId) {
+      await cloudinary.uploader.destroy(report.coverImage.publicId);
+    }
+
+    await report.deleteOne();
+
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ message: "Failed to delete report" });
+  }
+});
+
 
 
 
