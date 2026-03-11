@@ -13,6 +13,7 @@ import adminRoutes from "./routes/admin.routes.js";
 import { HeroSlide } from "./models/HeroSlide.js";
 import { Partner } from "./models/Partner.js";
 import { AnnualReport } from "./models/AnnualReport.js";
+import publicCertificateRoutes from "./routes/publicCertificate.routes.js";
 
 const app = express();
 
@@ -82,6 +83,8 @@ app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({ message: "Server error" });
 });
+
+app.use("/api/certificates", publicCertificateRoutes);
 
 /* ================= START SERVER ================= */
 const port = process.env.PORT || 8080;
