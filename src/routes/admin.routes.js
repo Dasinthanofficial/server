@@ -12,11 +12,92 @@ import { Partner } from "../models/Partner.js";
 import { AnnualReport } from "../models/AnnualReport.js";
 import { makeSlug } from "../utils/slug.js";
 import { Certificate } from "../models/Certificate.js";
+import {
+  HomeStats,
+  DEFAULT_HOME_STATS_ITEMS,
+} from "../models/HomeStats.js";
+import { Leadership, DEFAULT_LEADERSHIP } from "../models/Leadership.js";
+import {
+  AboutTimeline,
+  DEFAULT_ABOUT_TIMELINE_ITEMS,
+} from "../models/AboutTimeline.js";
 
 const router = Router();
 
 function normalizeCertificateId(value) {
   return String(value || "").trim().toUpperCase();
+}
+
+function normalizePostContent(body = {}) {
+  const wantsBlocks = body?.contentType === "blocks";
+
+  return {
+    contentType: wantsBlocks ? "blocks" : "markdown",
+    content: typeof body?.content === "string" ? body.content : "",
+    contentBlocks: Array.isArray(body?.contentBlocks) ? body.contentBlocks : [],
+  };
+}
+
+function normalizeHomeStatsItems(items) {
+  if (!Array.isArray(items)) return null;
+
+  const normalized = items.slice(0, 4).map((item) => ({
+    value: String(item?.value || "").trim(),
+    label: String(item?.label || "").trim(),
+  }));
+
+  if (normalized.length !== 4) return null;
+  if (normalized.some((item) => !item.value || !item.label)) return null;
+
+  return normalized;
+}
+
+function sortTimelineItems(items = []) {
+  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+function normalizeTimelineItems(items) {
+  if (!Array.isArray(items)) return null;
+
+  const normalized = items.map((item, index) => ({
+    year: String(item?.year || "").trim(),
+    label: String(item?.label || "").trim(),
+    sub: String(item?.sub || "").trim(),
+    order: index,
+  }));
+
+  if (normalized.length === 0) return null;
+  if (normalized.some((item) => !item.year || !item.label)) return null;
+
+  return normalized;
+}
+
+function sortByOrder(items = []) {
+  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+function normalizeLeadershipPayload(body) {
+  const rawDirectors = Array.isArray(body?.directors) ? body.directors : null;
+  const rawMembers = Array.isArray(body?.members) ? body.members : null;
+
+  if (!rawDirectors || !rawMembers) return null;
+
+  const directors = rawDirectors.map((item, index) => ({
+    name: String(item?.name || "").trim(),
+    role: String(item?.role || "").trim(),
+    order: index,
+  }));
+
+  const members = rawMembers.map((item, index) => ({
+    name: String(item?.name || "").trim(),
+    order: index,
+  }));
+
+  if (directors.length === 0) return null;
+  if (directors.some((item) => !item.name || !item.role)) return null;
+  if (members.some((item) => !item.name)) return null;
+
+  return { directors, members };
 }
 
 async function getNextOrder(Model) {
@@ -103,8 +184,16 @@ router.get("/posts", authAdmin, async (req, res) => {
 
 router.post("/posts", authAdmin, async (req, res) => {
   try {
-    const { title, excerpt, content, category, tags, coverImage, status } =
-      req.body || {};
+    const {
+      title,
+      excerpt,
+      category,
+      tags,
+      coverImage,
+      status,
+    } = req.body || {};
+
+    const normalizedContent = normalizePostContent(req.body || {});
 
     if (!title?.trim()) {
       return res.status(400).json({ message: "Title is required" });
@@ -128,7 +217,15 @@ router.post("/posts", authAdmin, async (req, res) => {
       title: title.trim(),
       slug,
       excerpt: excerpt || "",
-      content: content || "",
+      contentType: normalizedContent.contentType,
+      content:
+        normalizedContent.contentType === "markdown"
+          ? normalizedContent.content
+          : "",
+      contentBlocks:
+        normalizedContent.contentType === "blocks"
+          ? normalizedContent.contentBlocks
+          : [],
       category: category || "General",
       tags: Array.isArray(tags) ? tags : [],
       coverImage: coverImage || null,
@@ -148,14 +245,31 @@ router.put("/posts/:id", authAdmin, async (req, res) => {
     const post = await BlogPost.findById(req.params.id);
     if (!post) return res.status(404).json({ message: "Not found" });
 
-    const { title, excerpt, content, category, tags, coverImage, status } =
-      req.body || {};
+    const {
+      title,
+      excerpt,
+      category,
+      tags,
+      coverImage,
+      status,
+    } = req.body || {};
+
+    const normalizedContent = normalizePostContent(req.body || {});
 
     if (title) post.title = title.trim();
     post.excerpt = excerpt ?? post.excerpt;
-    post.content = content ?? post.content;
     post.category = category ?? post.category;
     post.tags = Array.isArray(tags) ? tags : post.tags;
+
+    post.contentType = normalizedContent.contentType;
+    post.content =
+      normalizedContent.contentType === "markdown"
+        ? normalizedContent.content
+        : "";
+    post.contentBlocks =
+      normalizedContent.contentType === "blocks"
+        ? normalizedContent.contentBlocks
+        : [];
 
     if ("coverImage" in req.body) {
       post.coverImage = coverImage;
@@ -176,7 +290,6 @@ router.put("/posts/:id", authAdmin, async (req, res) => {
     res.status(500).json({ message: "Failed to update post" });
   }
 });
-
 router.delete("/posts/:id", authAdmin, async (req, res) => {
   try {
     const post = await BlogPost.findById(req.params.id);
@@ -296,6 +409,44 @@ router.delete("/hero/:id", authAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to delete hero slide" });
+  }
+});
+
+/* ================= HOME STATS ================= */
+
+router.get("/home-stats", authAdmin, async (req, res) => {
+  try {
+    const doc = await HomeStats.findOne({ key: "home" }).lean();
+
+    res.json({
+      items: doc?.items?.length ? doc.items : DEFAULT_HOME_STATS_ITEMS,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch home stats" });
+  }
+});
+
+router.put("/home-stats", authAdmin, async (req, res) => {
+  try {
+    const items = normalizeHomeStatsItems(req.body?.items);
+
+    if (!items) {
+      return res.status(400).json({
+        message: "Exactly 4 valid stat items are required",
+      });
+    }
+
+    const doc = await HomeStats.findOneAndUpdate(
+      { key: "home" },
+      { key: "home", items },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({ items: doc.items });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update home stats" });
   }
 });
 
@@ -462,7 +613,8 @@ router.post("/certificates", authAdmin, async (req, res) => {
       !issuedBy?.trim()
     ) {
       return res.status(400).json({
-        message: "Student name, certificate ID, program, issued date, and issued by are required",
+        message:
+          "Student name, certificate ID, program, issued date, and issued by are required",
       });
     }
 
@@ -514,5 +666,97 @@ router.delete("/certificates/:id", authAdmin, async (req, res) => {
   }
 });
 
-export default router;
+/* ================= LEADERSHIP ================= */
 
+router.get("/leadership", authAdmin, async (req, res) => {
+  try {
+    const doc = await Leadership.findOne({ key: "aboutLeadership" }).lean();
+
+    if (!doc) {
+      return res.json({
+        directors: DEFAULT_LEADERSHIP.directors,
+        members: DEFAULT_LEADERSHIP.members,
+      });
+    }
+
+    res.json({
+      directors: sortByOrder(doc.directors || []),
+      members: sortByOrder(doc.members || []),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch leadership data" });
+  }
+});
+
+router.put("/leadership", authAdmin, async (req, res) => {
+  try {
+    const payload = normalizeLeadershipPayload(req.body);
+
+    if (!payload) {
+      return res.status(400).json({
+        message:
+          "At least one valid director is required. Director role and all member names must be filled.",
+      });
+    }
+
+    const doc = await Leadership.findOneAndUpdate(
+      { key: "aboutLeadership" },
+      { key: "aboutLeadership", ...payload },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    res.json({
+      directors: sortByOrder(doc.directors || []),
+      members: sortByOrder(doc.members || []),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update leadership data" });
+  }
+});
+
+/* ================= ABOUT TIMELINE ================= */
+
+router.get("/timeline", authAdmin, async (req, res) => {
+  try {
+    const doc = await AboutTimeline.findOne({ key: "aboutTimeline" }).lean();
+
+    res.json({
+      items: doc?.items?.length
+        ? sortTimelineItems(doc.items)
+        : DEFAULT_ABOUT_TIMELINE_ITEMS,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch timeline data" });
+  }
+});
+
+router.put("/timeline", authAdmin, async (req, res) => {
+  try {
+    const items = normalizeTimelineItems(req.body?.items);
+
+    if (!items) {
+      return res.status(400).json({
+        message: "At least one valid timeline item is required",
+      });
+    }
+
+    const doc = await AboutTimeline.findOneAndUpdate(
+      { key: "aboutTimeline" },
+      { key: "aboutTimeline", items },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    res.json({
+      items: sortTimelineItems(doc.items || []),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update timeline data" });
+  }
+});
+
+
+export default router;
