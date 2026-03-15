@@ -9,6 +9,7 @@ import { initCloudinary } from "./config/cloudinary.js";
 
 import publicBlogRoutes from "./routes/publicBlog.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
+import publicCertificateRoutes from "./routes/publicCertificate.routes.js";
 
 import { HeroSlide } from "./models/HeroSlide.js";
 import { Partner } from "./models/Partner.js";
@@ -17,15 +18,26 @@ import {
   HomeStats,
   DEFAULT_HOME_STATS_ITEMS,
 } from "./models/HomeStats.js";
-import publicCertificateRoutes from "./routes/publicCertificate.routes.js";
-import { Leadership, DEFAULT_LEADERSHIP } from "./models/Leadership.js";
+import {
+  Leadership,
+  DEFAULT_LEADERSHIP,
+} from "./models/Leadership.js";
 import {
   AboutTimeline,
   DEFAULT_ABOUT_TIMELINE_ITEMS,
 } from "./models/AboutTimeline.js";
 
-
 const app = express();
+
+function sortByOrder(items = []) {
+  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+
+function requireEnv(name) {
+  if (!process.env[name]) {
+    throw new Error(`Missing required env var: ${name}`);
+  }
+}
 
 /* ================= MIDDLEWARE ================= */
 app.use(helmet());
@@ -98,6 +110,24 @@ app.get("/api/reports", async (req, res) => {
   }
 });
 
+app.get("/api/reports/:id", async (req, res) => {
+  try {
+    const report = await AnnualReport.findOne({
+      _id: req.params.id,
+      active: true,
+    }).lean();
+
+    if (!report) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+
+    res.json({ report });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch report" });
+  }
+});
+
 /* ================= PUBLIC LEADERSHIP ================= */
 app.get("/api/leadership", async (req, res) => {
   try {
@@ -111,16 +141,28 @@ app.get("/api/leadership", async (req, res) => {
     }
 
     res.json({
-      directors: [...(doc.directors || [])].sort(
-        (a, b) => (a.order ?? 0) - (b.order ?? 0)
-      ),
-      members: [...(doc.members || [])].sort(
-        (a, b) => (a.order ?? 0) - (b.order ?? 0)
-      ),
+      directors: sortByOrder(doc.directors || []),
+      members: sortByOrder(doc.members || []),
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to fetch leadership data" });
+  }
+});
+
+/* ================= PUBLIC ABOUT TIMELINE ================= */
+app.get("/api/timeline", async (req, res) => {
+  try {
+    const doc = await AboutTimeline.findOne({ key: "aboutTimeline" }).lean();
+
+    res.json({
+      items: doc?.items?.length
+        ? sortByOrder(doc.items)
+        : DEFAULT_ABOUT_TIMELINE_ITEMS,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch timeline data" });
   }
 });
 
@@ -132,29 +174,45 @@ app.use("/api/certificates", publicCertificateRoutes);
 /* ================= ERROR HANDLER (MUST BE LAST) ================= */
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ message: "Server error" });
-});
 
-/* ================= PUBLIC ABOUT TIMELINE ================= */
-app.get("/api/timeline", async (req, res) => {
-  try {
-    const doc = await AboutTimeline.findOne({ key: "aboutTimeline" }).lean();
-
-    res.json({
-      items: doc?.items?.length
-        ? [...doc.items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-        : DEFAULT_ABOUT_TIMELINE_ITEMS,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to fetch timeline data" });
+  if (err?.name === "MulterError") {
+    return res.status(400).json({ message: err.message });
   }
+
+  if (err?.message === "Only images and PDFs are allowed") {
+    return res.status(400).json({ message: err.message });
+  }
+
+  res.status(500).json({ message: "Server error" });
 });
 
 /* ================= START SERVER ================= */
 const port = process.env.PORT || 8080;
 
-await connectDB(process.env.MONGO_URI);
-initCloudinary();
+async function start() {
+  try {
+    requireEnv("MONGO_URI");
+    requireEnv("JWT_SECRET");
+    requireEnv("ADMIN_EMAIL");
 
-app.listen(port, () => console.log(`API running on :${port}`));
+    if (!process.env.ADMIN_PASSWORD_HASH && !process.env.ADMIN_PASSWORD) {
+      throw new Error("Missing ADMIN_PASSWORD_HASH or ADMIN_PASSWORD");
+    }
+
+    requireEnv("CLOUDINARY_CLOUD_NAME");
+    requireEnv("CLOUDINARY_API_KEY");
+    requireEnv("CLOUDINARY_API_SECRET");
+
+    await connectDB(process.env.MONGO_URI);
+    initCloudinary();
+
+    app.listen(port, () => {
+      console.log(`API running on :${port}`);
+    });
+  } catch (err) {
+    console.error("Failed to start server:", err);
+    process.exit(1);
+  }
+}
+
+start();

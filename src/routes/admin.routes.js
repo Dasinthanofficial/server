@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import multer from "multer";
+import mongoose from "mongoose";
 import { v2 as cloudinary } from "cloudinary";
 
 import { authAdmin } from "../middleware/authAdmin.js";
@@ -10,17 +11,20 @@ import { BlogPost } from "../models/BlogPost.js";
 import { HeroSlide } from "../models/HeroSlide.js";
 import { Partner } from "../models/Partner.js";
 import { AnnualReport } from "../models/AnnualReport.js";
-import { makeSlug } from "../utils/slug.js";
 import { Certificate } from "../models/Certificate.js";
 import {
   HomeStats,
   DEFAULT_HOME_STATS_ITEMS,
 } from "../models/HomeStats.js";
-import { Leadership, DEFAULT_LEADERSHIP } from "../models/Leadership.js";
+import {
+  Leadership,
+  DEFAULT_LEADERSHIP,
+} from "../models/Leadership.js";
 import {
   AboutTimeline,
   DEFAULT_ABOUT_TIMELINE_ITEMS,
 } from "../models/AboutTimeline.js";
+import { makeSlug } from "../utils/slug.js";
 
 const router = Router();
 
@@ -29,13 +33,26 @@ function normalizeCertificateId(value) {
 }
 
 function normalizePostContent(body = {}) {
-  const wantsBlocks = body?.contentType === "blocks";
+  const hasBlocks = Array.isArray(body?.contentBlocks);
+  const hasMarkdown = typeof body?.content === "string";
+
+  if (body?.contentType === "blocks" || (!("contentType" in body) && hasBlocks)) {
+    return {
+      contentType: "blocks",
+      content: "",
+      contentBlocks: hasBlocks ? body.contentBlocks : [],
+    };
+  }
 
   return {
-    contentType: wantsBlocks ? "blocks" : "markdown",
-    content: typeof body?.content === "string" ? body.content : "",
-    contentBlocks: Array.isArray(body?.contentBlocks) ? body.contentBlocks : [],
+    contentType: "markdown",
+    content: hasMarkdown ? body.content : "",
+    contentBlocks: [],
   };
+}
+
+function hasPostContentFields(body = {}) {
+  return "contentType" in body || "content" in body || "contentBlocks" in body;
 }
 
 function normalizeHomeStatsItems(items) {
@@ -48,26 +65,6 @@ function normalizeHomeStatsItems(items) {
 
   if (normalized.length !== 4) return null;
   if (normalized.some((item) => !item.value || !item.label)) return null;
-
-  return normalized;
-}
-
-function sortTimelineItems(items = []) {
-  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-}
-
-function normalizeTimelineItems(items) {
-  if (!Array.isArray(items)) return null;
-
-  const normalized = items.map((item, index) => ({
-    year: String(item?.year || "").trim(),
-    label: String(item?.label || "").trim(),
-    sub: String(item?.sub || "").trim(),
-    order: index,
-  }));
-
-  if (normalized.length === 0) return null;
-  if (normalized.some((item) => !item.year || !item.label)) return null;
 
   return normalized;
 }
@@ -85,11 +82,28 @@ function normalizeLeadershipPayload(body) {
   const directors = rawDirectors.map((item, index) => ({
     name: String(item?.name || "").trim(),
     role: String(item?.role || "").trim(),
+    photo: item?.photo?.url
+      ? {
+          url: String(item.photo.url || "").trim(),
+          publicId: String(item.photo.publicId || "").trim(),
+          width: Number(item.photo.width) || undefined,
+          height: Number(item.photo.height) || undefined,
+        }
+      : null,
     order: index,
   }));
 
   const members = rawMembers.map((item, index) => ({
     name: String(item?.name || "").trim(),
+    role: String(item?.role || "Board Member").trim(),
+    photo: item?.photo?.url
+      ? {
+          url: String(item.photo.url || "").trim(),
+          publicId: String(item.photo.publicId || "").trim(),
+          width: Number(item.photo.width) || undefined,
+          height: Number(item.photo.height) || undefined,
+        }
+      : null,
     order: index,
   }));
 
@@ -100,13 +114,58 @@ function normalizeLeadershipPayload(body) {
   return { directors, members };
 }
 
-async function getNextOrder(Model) {
-  const last = await Model.findOne()
-    .sort({ order: -1 })
-    .select("order")
-    .lean();
+function sortTimelineItems(items = []) {
+  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
 
+function normalizeTimelineItems(items) {
+  if (!Array.isArray(items)) return null;
+
+  const normalized = items.map((item, index) => ({
+    year: String(item?.year || "").trim(),
+    label: String(item?.label || "").trim(),
+    sub: String(item?.sub || "").trim(),
+    icon: item?.icon?.url
+      ? {
+          url: String(item.icon.url || "").trim(),
+          publicId: String(item.icon.publicId || "").trim(),
+          width: Number(item.icon.width) || undefined,
+          height: Number(item.icon.height) || undefined,
+        }
+      : null,
+    order: index,
+  }));
+
+  if (normalized.length === 0) return null;
+  if (normalized.some((item) => !item.year || !item.label)) return null;
+
+  return normalized;
+}
+
+async function getNextOrder(Model) {
+  const last = await Model.findOne().sort({ order: -1 }).select("order").lean();
   return (last?.order ?? -1) + 1;
+}
+
+function isValidId(id) {
+  return mongoose.isValidObjectId(id);
+}
+
+function removedPublicIds(oldIds = [], newIds = []) {
+  const oldSet = new Set(oldIds.filter(Boolean));
+  const newSet = new Set(newIds.filter(Boolean));
+  return [...oldSet].filter((id) => !newSet.has(id));
+}
+
+async function destroyImagePublicIds(ids = []) {
+  if (!ids.length) return;
+  await Promise.allSettled(
+    ids.map((publicId) =>
+      cloudinary.uploader.destroy(publicId, {
+        resource_type: "image",
+      })
+    )
+  );
 }
 
 const upload = multer({
@@ -153,11 +212,9 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    const token = jwt.sign(
-      { role: "admin", email },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const token = jwt.sign({ role: "admin", email }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
 
     res.json({ token });
   } catch (err) {
@@ -170,10 +227,12 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
 
 router.get("/posts", authAdmin, async (req, res) => {
   try {
-    const status = (req.query.status || "").trim();
-    const filter = status ? { status } : {};
-
-    const posts = await BlogPost.find(filter).sort({ updatedAt: -1 }).lean();
+    const posts = await BlogPost.find()
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .select(
+        "title slug excerpt category status publishedAt updatedAt createdAt coverImage"
+      )
+      .lean();
 
     res.json({ posts });
   } catch (err) {
@@ -182,18 +241,36 @@ router.get("/posts", authAdmin, async (req, res) => {
   }
 });
 
+router.get("/posts/:id", authAdmin, async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const post = await BlogPost.findById(req.params.id).lean();
+
+    if (!post) {
+      return res.status(404).json({ message: "Not found" });
+    }
+
+    res.json({ post });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch post" });
+  }
+});
+
 router.post("/posts", authAdmin, async (req, res) => {
   try {
-    const {
-      title,
-      excerpt,
-      category,
-      tags,
-      coverImage,
-      status,
-    } = req.body || {};
+    const { title, excerpt, category, tags, coverImage, status } = req.body || {};
 
-    const normalizedContent = normalizePostContent(req.body || {});
+    const normalizedContent = hasPostContentFields(req.body || {})
+      ? normalizePostContent(req.body || {})
+      : {
+          contentType: "blocks",
+          content: "",
+          contentBlocks: [],
+        };
 
     if (!title?.trim()) {
       return res.status(400).json({ message: "Title is required" });
@@ -242,37 +319,54 @@ router.post("/posts", authAdmin, async (req, res) => {
 
 router.put("/posts/:id", authAdmin, async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
     const post = await BlogPost.findById(req.params.id);
     if (!post) return res.status(404).json({ message: "Not found" });
 
-    const {
-      title,
-      excerpt,
-      category,
-      tags,
-      coverImage,
-      status,
-    } = req.body || {};
+    const { title, excerpt, category, tags, coverImage, status } = req.body || {};
 
-    const normalizedContent = normalizePostContent(req.body || {});
+    if ("title" in (req.body || {})) {
+      const trimmedTitle = String(title || "").trim();
 
-    if (title) post.title = title.trim();
+      if (!trimmedTitle) {
+        return res.status(400).json({ message: "Title is required" });
+      }
+
+      post.title = trimmedTitle;
+    }
+
     post.excerpt = excerpt ?? post.excerpt;
     post.category = category ?? post.category;
     post.tags = Array.isArray(tags) ? tags : post.tags;
 
-    post.contentType = normalizedContent.contentType;
-    post.content =
-      normalizedContent.contentType === "markdown"
-        ? normalizedContent.content
-        : "";
-    post.contentBlocks =
-      normalizedContent.contentType === "blocks"
-        ? normalizedContent.contentBlocks
-        : [];
+    if (hasPostContentFields(req.body || {})) {
+      const normalizedContent = normalizePostContent(req.body || {});
 
-    if ("coverImage" in req.body) {
-      post.coverImage = coverImage;
+      post.contentType = normalizedContent.contentType;
+      post.content =
+        normalizedContent.contentType === "markdown"
+          ? normalizedContent.content
+          : "";
+      post.contentBlocks =
+        normalizedContent.contentType === "blocks"
+          ? normalizedContent.contentBlocks
+          : [];
+    }
+
+    let oldCoverPublicIdToDelete = null;
+
+    if ("coverImage" in (req.body || {})) {
+      const oldPublicId = post.coverImage?.publicId;
+      const newPublicId = coverImage?.publicId;
+
+      if (oldPublicId && oldPublicId !== newPublicId) {
+        oldCoverPublicIdToDelete = oldPublicId;
+      }
+
+      post.coverImage = coverImage || null;
     }
 
     if (status === "published" && post.status !== "published") {
@@ -284,14 +378,28 @@ router.put("/posts/:id", authAdmin, async (req, res) => {
     }
 
     await post.save();
+
+    if (oldCoverPublicIdToDelete) {
+      try {
+        await cloudinary.uploader.destroy(oldCoverPublicIdToDelete, {
+          resource_type: "image",
+        });
+      } catch {}
+    }
+
     res.json({ post });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to update post" });
   }
 });
+
 router.delete("/posts/:id", authAdmin, async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
     const post = await BlogPost.findById(req.params.id);
     if (!post) return res.status(404).json({ message: "Not found" });
 
@@ -393,6 +501,10 @@ router.post("/hero", authAdmin, async (req, res) => {
 
 router.delete("/hero/:id", authAdmin, async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
     const slide = await HeroSlide.findById(req.params.id);
     if (!slide) return res.status(404).json({ message: "Not found" });
 
@@ -450,6 +562,126 @@ router.put("/home-stats", authAdmin, async (req, res) => {
   }
 });
 
+/* ================= LEADERSHIP ================= */
+
+router.get("/leadership", authAdmin, async (req, res) => {
+  try {
+    const doc = await Leadership.findOne({ key: "aboutLeadership" }).lean();
+
+    if (!doc) {
+      return res.json({
+        directors: DEFAULT_LEADERSHIP.directors,
+        members: DEFAULT_LEADERSHIP.members,
+      });
+    }
+
+    res.json({
+      directors: sortByOrder(doc.directors || []),
+      members: sortByOrder(doc.members || []),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch leadership data" });
+  }
+});
+
+router.put("/leadership", authAdmin, async (req, res) => {
+  try {
+    const payload = normalizeLeadershipPayload(req.body);
+
+    if (!payload) {
+      return res.status(400).json({
+        message:
+          "At least one valid director is required. Director role and all member names must be filled.",
+      });
+    }
+
+    const existing = await Leadership.findOne({
+      key: "aboutLeadership",
+    }).lean();
+
+    const oldIds = [
+      ...(existing?.directors || []).map((item) => item.photo?.publicId),
+      ...(existing?.members || []).map((item) => item.photo?.publicId),
+    ];
+
+    const newIds = [
+      ...payload.directors.map((item) => item.photo?.publicId),
+      ...payload.members.map((item) => item.photo?.publicId),
+    ];
+
+    const idsToDelete = removedPublicIds(oldIds, newIds);
+
+    const doc = await Leadership.findOneAndUpdate(
+      { key: "aboutLeadership" },
+      { key: "aboutLeadership", ...payload },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    await destroyImagePublicIds(idsToDelete);
+
+    res.json({
+      directors: sortByOrder(doc.directors || []),
+      members: sortByOrder(doc.members || []),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update leadership data" });
+  }
+});
+
+/* ================= ABOUT TIMELINE ================= */
+
+router.get("/timeline", authAdmin, async (req, res) => {
+  try {
+    const doc = await AboutTimeline.findOne({ key: "aboutTimeline" }).lean();
+
+    res.json({
+      items: doc?.items?.length
+        ? sortTimelineItems(doc.items)
+        : DEFAULT_ABOUT_TIMELINE_ITEMS,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch timeline data" });
+  }
+});
+
+router.put("/timeline", authAdmin, async (req, res) => {
+  try {
+    const items = normalizeTimelineItems(req.body?.items);
+
+    if (!items) {
+      return res.status(400).json({
+        message: "At least one valid timeline item is required",
+      });
+    }
+
+    const existing = await AboutTimeline.findOne({
+      key: "aboutTimeline",
+    }).lean();
+
+    const oldIds = (existing?.items || []).map((item) => item.icon?.publicId);
+    const newIds = items.map((item) => item.icon?.publicId);
+    const idsToDelete = removedPublicIds(oldIds, newIds);
+
+    const doc = await AboutTimeline.findOneAndUpdate(
+      { key: "aboutTimeline" },
+      { key: "aboutTimeline", items },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    await destroyImagePublicIds(idsToDelete);
+
+    res.json({
+      items: sortTimelineItems(doc.items || []),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update timeline data" });
+  }
+});
+
 /* ================= PARTNERS ================= */
 
 router.get("/partners", authAdmin, async (req, res) => {
@@ -486,6 +718,10 @@ router.post("/partners", authAdmin, async (req, res) => {
 
 router.delete("/partners/:id", authAdmin, async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
     const partner = await Partner.findById(req.params.id);
     if (!partner) return res.status(404).json({ message: "Not found" });
 
@@ -544,6 +780,10 @@ router.post("/reports", authAdmin, async (req, res) => {
 
 router.delete("/reports/:id", authAdmin, async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
     const report = await AnnualReport.findByIdAndDelete(req.params.id);
 
     if (!report) {
@@ -653,6 +893,10 @@ router.post("/certificates", authAdmin, async (req, res) => {
 
 router.delete("/certificates/:id", authAdmin, async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
     const certificate = await Certificate.findById(req.params.id);
     if (!certificate) {
       return res.status(404).json({ message: "Not found" });
@@ -665,98 +909,5 @@ router.delete("/certificates/:id", authAdmin, async (req, res) => {
     res.status(500).json({ message: "Failed to delete certificate" });
   }
 });
-
-/* ================= LEADERSHIP ================= */
-
-router.get("/leadership", authAdmin, async (req, res) => {
-  try {
-    const doc = await Leadership.findOne({ key: "aboutLeadership" }).lean();
-
-    if (!doc) {
-      return res.json({
-        directors: DEFAULT_LEADERSHIP.directors,
-        members: DEFAULT_LEADERSHIP.members,
-      });
-    }
-
-    res.json({
-      directors: sortByOrder(doc.directors || []),
-      members: sortByOrder(doc.members || []),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to fetch leadership data" });
-  }
-});
-
-router.put("/leadership", authAdmin, async (req, res) => {
-  try {
-    const payload = normalizeLeadershipPayload(req.body);
-
-    if (!payload) {
-      return res.status(400).json({
-        message:
-          "At least one valid director is required. Director role and all member names must be filled.",
-      });
-    }
-
-    const doc = await Leadership.findOneAndUpdate(
-      { key: "aboutLeadership" },
-      { key: "aboutLeadership", ...payload },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    ).lean();
-
-    res.json({
-      directors: sortByOrder(doc.directors || []),
-      members: sortByOrder(doc.members || []),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to update leadership data" });
-  }
-});
-
-/* ================= ABOUT TIMELINE ================= */
-
-router.get("/timeline", authAdmin, async (req, res) => {
-  try {
-    const doc = await AboutTimeline.findOne({ key: "aboutTimeline" }).lean();
-
-    res.json({
-      items: doc?.items?.length
-        ? sortTimelineItems(doc.items)
-        : DEFAULT_ABOUT_TIMELINE_ITEMS,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to fetch timeline data" });
-  }
-});
-
-router.put("/timeline", authAdmin, async (req, res) => {
-  try {
-    const items = normalizeTimelineItems(req.body?.items);
-
-    if (!items) {
-      return res.status(400).json({
-        message: "At least one valid timeline item is required",
-      });
-    }
-
-    const doc = await AboutTimeline.findOneAndUpdate(
-      { key: "aboutTimeline" },
-      { key: "aboutTimeline", items },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    ).lean();
-
-    res.json({
-      items: sortTimelineItems(doc.items || []),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to update timeline data" });
-  }
-});
-
 
 export default router;
