@@ -12,18 +12,9 @@ import { HeroSlide } from "../models/HeroSlide.js";
 import { Partner } from "../models/Partner.js";
 import { AnnualReport } from "../models/AnnualReport.js";
 import { Certificate } from "../models/Certificate.js";
-import {
-  HomeStats,
-  DEFAULT_HOME_STATS_ITEMS,
-} from "../models/HomeStats.js";
-import {
-  Leadership,
-  DEFAULT_LEADERSHIP,
-} from "../models/Leadership.js";
-import {
-  AboutTimeline,
-  DEFAULT_ABOUT_TIMELINE_ITEMS,
-} from "../models/AboutTimeline.js";
+import { HomeStats } from "../models/HomeStats.js";
+import { Leadership } from "../models/Leadership.js";
+import { AboutTimeline } from "../models/AboutTimeline.js";
 import { makeSlug } from "../utils/slug.js";
 
 const router = Router();
@@ -90,6 +81,8 @@ function normalizeLeadershipPayload(body) {
           height: Number(item.photo.height) || undefined,
         }
       : null,
+    facebook: String(item?.facebook || "").trim(),
+    whatsapp: String(item?.whatsapp || "").trim(),
     order: index,
   }));
 
@@ -104,6 +97,8 @@ function normalizeLeadershipPayload(body) {
           height: Number(item.photo.height) || undefined,
         }
       : null,
+    facebook: String(item?.facebook || "").trim(),
+    whatsapp: String(item?.whatsapp || "").trim(),
     order: index,
   }));
 
@@ -531,7 +526,7 @@ router.get("/home-stats", authAdmin, async (req, res) => {
     const doc = await HomeStats.findOne({ key: "home" }).lean();
 
     res.json({
-      items: doc?.items?.length ? doc.items : DEFAULT_HOME_STATS_ITEMS,
+      items: Array.isArray(doc?.items) ? doc.items : [],
     });
   } catch (err) {
     console.error(err);
@@ -570,8 +565,8 @@ router.get("/leadership", authAdmin, async (req, res) => {
 
     if (!doc) {
       return res.json({
-        directors: DEFAULT_LEADERSHIP.directors,
-        members: DEFAULT_LEADERSHIP.members,
+        directors: [],
+        members: [],
       });
     }
 
@@ -637,9 +632,7 @@ router.get("/timeline", authAdmin, async (req, res) => {
     const doc = await AboutTimeline.findOne({ key: "aboutTimeline" }).lean();
 
     res.json({
-      items: doc?.items?.length
-        ? sortTimelineItems(doc.items)
-        : DEFAULT_ABOUT_TIMELINE_ITEMS,
+      items: Array.isArray(doc?.items) ? sortTimelineItems(doc.items) : [],
     });
   } catch (err) {
     console.error(err);

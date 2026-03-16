@@ -14,18 +14,9 @@ import publicCertificateRoutes from "./routes/publicCertificate.routes.js";
 import { HeroSlide } from "./models/HeroSlide.js";
 import { Partner } from "./models/Partner.js";
 import { AnnualReport } from "./models/AnnualReport.js";
-import {
-  HomeStats,
-  DEFAULT_HOME_STATS_ITEMS,
-} from "./models/HomeStats.js";
-import {
-  Leadership,
-  DEFAULT_LEADERSHIP,
-} from "./models/Leadership.js";
-import {
-  AboutTimeline,
-  DEFAULT_ABOUT_TIMELINE_ITEMS,
-} from "./models/AboutTimeline.js";
+import { HomeStats } from "./models/HomeStats.js";
+import { Leadership } from "./models/Leadership.js";
+import { AboutTimeline } from "./models/AboutTimeline.js";
 
 const app = express();
 
@@ -74,7 +65,7 @@ app.get("/api/home-stats", async (req, res) => {
     const doc = await HomeStats.findOne({ key: "home" }).lean();
 
     res.json({
-      items: doc?.items?.length ? doc.items : DEFAULT_HOME_STATS_ITEMS,
+      items: Array.isArray(doc?.items) ? doc.items : [],
     });
   } catch (err) {
     console.error(err);
@@ -135,8 +126,8 @@ app.get("/api/leadership", async (req, res) => {
 
     if (!doc) {
       return res.json({
-        directors: DEFAULT_LEADERSHIP.directors,
-        members: DEFAULT_LEADERSHIP.members,
+        directors: [],
+        members: [],
       });
     }
 
@@ -156,9 +147,7 @@ app.get("/api/timeline", async (req, res) => {
     const doc = await AboutTimeline.findOne({ key: "aboutTimeline" }).lean();
 
     res.json({
-      items: doc?.items?.length
-        ? sortByOrder(doc.items)
-        : DEFAULT_ABOUT_TIMELINE_ITEMS,
+      items: Array.isArray(doc?.items) ? sortByOrder(doc.items) : [],
     });
   } catch (err) {
     console.error(err);
