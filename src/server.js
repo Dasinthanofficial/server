@@ -17,6 +17,12 @@ import { AnnualReport } from "./models/AnnualReport.js";
 import { HomeStats } from "./models/HomeStats.js";
 import { Leadership } from "./models/Leadership.js";
 import { AboutTimeline } from "./models/AboutTimeline.js";
+import {
+  AboutHistory,
+  DEFAULT_ABOUT_HISTORY,
+} from "./models/AboutHistory.js";
+import { CoreValue } from "./models/CoreValue.js";
+import { ProgramFocus } from "./models/ProgramFocus.js";
 
 const app = express();
 
@@ -152,6 +158,56 @@ app.get("/api/timeline", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to fetch timeline data" });
+  }
+});
+
+/* ================= PUBLIC ABOUT HISTORY ================= */
+app.get("/api/about-history", async (req, res) => {
+  try {
+    const doc = await AboutHistory.findOne({ key: "aboutHistory" }).lean();
+
+    res.json({
+      aboutHistory: doc
+        ? {
+            kicker: doc.kicker || DEFAULT_ABOUT_HISTORY.kicker,
+            title: doc.title || DEFAULT_ABOUT_HISTORY.title,
+            paragraph1: doc.paragraph1 || DEFAULT_ABOUT_HISTORY.paragraph1,
+            paragraph2: doc.paragraph2 || DEFAULT_ABOUT_HISTORY.paragraph2,
+            image: doc.image || null,
+          }
+        : DEFAULT_ABOUT_HISTORY,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch about history" });
+  }
+});
+
+/* ================= PUBLIC CORE VALUES ================= */
+app.get("/api/core-values", async (req, res) => {
+  try {
+    const values = await CoreValue.find({ active: true })
+      .sort({ order: 1 })
+      .lean();
+
+    res.json({ values });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch core values" });
+  }
+});
+
+/* ================= PUBLIC PROGRAM FOCUS ================= */
+app.get("/api/program-focus", async (req, res) => {
+  try {
+    const items = await ProgramFocus.find({ active: true })
+      .sort({ order: 1 })
+      .lean();
+
+    res.json({ items });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch program focus items" });
   }
 });
 

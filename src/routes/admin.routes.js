@@ -15,6 +15,12 @@ import { Certificate } from "../models/Certificate.js";
 import { HomeStats } from "../models/HomeStats.js";
 import { Leadership } from "../models/Leadership.js";
 import { AboutTimeline } from "../models/AboutTimeline.js";
+import {
+  AboutHistory,
+  DEFAULT_ABOUT_HISTORY,
+} from "../models/AboutHistory.js";
+import { CoreValue } from "../models/CoreValue.js";
+import { ProgramFocus } from "../models/ProgramFocus.js";
 import { makeSlug } from "../utils/slug.js";
 
 const router = Router();
@@ -135,6 +141,73 @@ function normalizeTimelineItems(items) {
   if (normalized.some((item) => !item.year || !item.label)) return null;
 
   return normalized;
+}
+
+function normalizeAboutHistoryPayload(body = {}) {
+  const kicker = String(
+    body?.kicker || DEFAULT_ABOUT_HISTORY.kicker
+  ).trim();
+
+  const title = String(body?.title || "").trim();
+  const paragraph1 = String(body?.paragraph1 || "").trim();
+  const paragraph2 = String(body?.paragraph2 || "").trim();
+
+  const image = body?.image?.url
+    ? {
+        url: String(body.image.url || "").trim(),
+        publicId: String(body.image.publicId || "").trim(),
+        width: Number(body.image.width) || undefined,
+        height: Number(body.image.height) || undefined,
+      }
+    : null;
+
+  if (!title || !paragraph1 || !paragraph2) return null;
+
+  return {
+    kicker: kicker || DEFAULT_ABOUT_HISTORY.kicker,
+    title,
+    paragraph1,
+    paragraph2,
+    image,
+  };
+}
+
+function normalizeCoreValuePayload(body = {}) {
+  const title = String(body?.title || "").trim();
+  const description = String(body?.description || "").trim();
+  const active = body?.active !== undefined ? Boolean(body.active) : true;
+
+  if (!title || !description) return null;
+
+  return {
+    title,
+    description,
+    active,
+  };
+}
+
+function normalizeProgramFocusPayload(body = {}) {
+  const title = String(body?.title || "").trim();
+  const description = String(body?.description || "").trim();
+  const active = body?.active !== undefined ? Boolean(body.active) : true;
+
+  const image = body?.image?.url
+    ? {
+        url: String(body.image.url || "").trim(),
+        publicId: String(body.image.publicId || "").trim(),
+        width: Number(body.image.width) || undefined,
+        height: Number(body.image.height) || undefined,
+      }
+    : null;
+
+  if (!title || !description || !image?.url) return null;
+
+  return {
+    title,
+    description,
+    image,
+    active,
+  };
 }
 
 async function getNextOrder(Model) {
@@ -672,6 +745,340 @@ router.put("/timeline", authAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to update timeline data" });
+  }
+});
+
+/* ================= ABOUT HISTORY ================= */
+
+router.get("/about-history", authAdmin, async (req, res) => {
+  try {
+    const doc = await AboutHistory.findOne({ key: "aboutHistory" }).lean();
+
+    res.json({
+      aboutHistory: doc
+        ? {
+            kicker: doc.kicker || DEFAULT_ABOUT_HISTORY.kicker,
+            title: doc.title || DEFAULT_ABOUT_HISTORY.title,
+            paragraph1: doc.paragraph1 || DEFAULT_ABOUT_HISTORY.paragraph1,
+            paragraph2: doc.paragraph2 || DEFAULT_ABOUT_HISTORY.paragraph2,
+            image: doc.image || null,
+          }
+        : DEFAULT_ABOUT_HISTORY,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch about history" });
+  }
+});
+
+router.put("/about-history", authAdmin, async (req, res) => {
+  try {
+    const payload = normalizeAboutHistoryPayload(req.body);
+
+    if (!payload) {
+      return res.status(400).json({
+        message: "Title, paragraph 1, and paragraph 2 are required",
+      });
+    }
+
+    const existing = await AboutHistory.findOne({
+      key: "aboutHistory",
+    }).lean();
+
+    const oldPublicId = existing?.image?.publicId || null;
+    const newPublicId = payload.image?.publicId || null;
+    const imageToDelete =
+      oldPublicId && oldPublicId !== newPublicId ? oldPublicId : null;
+
+    const doc = await AboutHistory.findOneAndUpdate(
+      { key: "aboutHistory" },
+      { key: "aboutHistory", ...payload },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    if (imageToDelete) {
+      try {
+        await cloudinary.uploader.destroy(imageToDelete, {
+          resource_type: "image",
+        });
+      } catch {}
+    }
+
+    res.json({
+      aboutHistory: {
+        kicker: doc.kicker,
+        title: doc.title,
+        paragraph1: doc.paragraph1,
+        paragraph2: doc.paragraph2,
+        image: doc.image || null,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update about history" });
+  }
+});
+
+/* ================= CORE VALUES ================= */
+
+router.get("/core-values", authAdmin, async (req, res) => {
+  try {
+    const values = await CoreValue.find().sort({ order: 1 }).lean();
+    res.json({ values });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch core values" });
+  }
+});
+
+router.post("/core-values", authAdmin, async (req, res) => {
+  try {
+    const payload = normalizeCoreValuePayload(req.body);
+
+    if (!payload) {
+      return res.status(400).json({
+        message: "Title and description are required",
+      });
+    }
+
+    const value = await CoreValue.create({
+      ...payload,
+      order: await getNextOrder(CoreValue),
+    });
+
+    res.status(201).json({ value });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to create core value" });
+  }
+});
+
+router.put("/core-values/reorder", authAdmin, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : null;
+
+    if (!ids) {
+      return res.status(400).json({ message: "ids array is required" });
+    }
+
+    if (ids.some((id) => !isValidId(id))) {
+      return res.status(400).json({ message: "Invalid ids" });
+    }
+
+    if (ids.length === 0) {
+      return res.json({ values: [] });
+    }
+
+    await CoreValue.bulkWrite(
+      ids.map((id, index) => ({
+        updateOne: {
+          filter: { _id: id },
+          update: { order: index },
+        },
+      }))
+    );
+
+    const values = await CoreValue.find().sort({ order: 1 }).lean();
+    res.json({ values });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to reorder core values" });
+  }
+});
+
+router.put("/core-values/:id", authAdmin, async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const payload = normalizeCoreValuePayload(req.body);
+
+    if (!payload) {
+      return res.status(400).json({
+        message: "Title and description are required",
+      });
+    }
+
+    const value = await CoreValue.findById(req.params.id);
+
+    if (!value) {
+      return res.status(404).json({ message: "Core value not found" });
+    }
+
+    value.title = payload.title;
+    value.description = payload.description;
+    value.active = payload.active;
+
+    await value.save();
+
+    res.json({ value });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update core value" });
+  }
+});
+
+router.delete("/core-values/:id", authAdmin, async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const value = await CoreValue.findById(req.params.id);
+
+    if (!value) {
+      return res.status(404).json({ message: "Core value not found" });
+    }
+
+    await value.deleteOne();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to delete core value" });
+  }
+});
+
+/* ================= PROGRAM FOCUS ================= */
+
+router.get("/program-focus", authAdmin, async (req, res) => {
+  try {
+    const items = await ProgramFocus.find().sort({ order: 1 }).lean();
+    res.json({ items });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to fetch program focus items" });
+  }
+});
+
+router.post("/program-focus", authAdmin, async (req, res) => {
+  try {
+    const payload = normalizeProgramFocusPayload(req.body);
+
+    if (!payload) {
+      return res.status(400).json({
+        message: "Title, description, and image are required",
+      });
+    }
+
+    const item = await ProgramFocus.create({
+      ...payload,
+      order: await getNextOrder(ProgramFocus),
+    });
+
+    res.status(201).json({ item });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to create program focus item" });
+  }
+});
+
+router.put("/program-focus/reorder", authAdmin, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : null;
+
+    if (!ids) {
+      return res.status(400).json({ message: "ids array is required" });
+    }
+
+    if (ids.some((id) => !isValidId(id))) {
+      return res.status(400).json({ message: "Invalid ids" });
+    }
+
+    if (ids.length === 0) {
+      return res.json({ items: [] });
+    }
+
+    await ProgramFocus.bulkWrite(
+      ids.map((id, index) => ({
+        updateOne: {
+          filter: { _id: id },
+          update: { order: index },
+        },
+      }))
+    );
+
+    const items = await ProgramFocus.find().sort({ order: 1 }).lean();
+    res.json({ items });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to reorder program focus items" });
+  }
+});
+
+router.put("/program-focus/:id", authAdmin, async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const payload = normalizeProgramFocusPayload(req.body);
+
+    if (!payload) {
+      return res.status(400).json({
+        message: "Title, description, and image are required",
+      });
+    }
+
+    const item = await ProgramFocus.findById(req.params.id);
+
+    if (!item) {
+      return res.status(404).json({ message: "Program focus item not found" });
+    }
+
+    const oldPublicId = item.image?.publicId || null;
+    const newPublicId = payload.image?.publicId || null;
+    const imageToDelete =
+      oldPublicId && oldPublicId !== newPublicId ? oldPublicId : null;
+
+    item.title = payload.title;
+    item.description = payload.description;
+    item.image = payload.image;
+    item.active = payload.active;
+
+    await item.save();
+
+    if (imageToDelete) {
+      try {
+        await cloudinary.uploader.destroy(imageToDelete, {
+          resource_type: "image",
+        });
+      } catch {}
+    }
+
+    res.json({ item });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to update program focus item" });
+  }
+});
+
+router.delete("/program-focus/:id", authAdmin, async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ message: "Invalid id" });
+    }
+
+    const item = await ProgramFocus.findById(req.params.id);
+
+    if (!item) {
+      return res.status(404).json({ message: "Program focus item not found" });
+    }
+
+    if (item.image?.publicId) {
+      try {
+        await cloudinary.uploader.destroy(item.image.publicId, {
+          resource_type: "image",
+        });
+      } catch {}
+    }
+
+    await item.deleteOne();
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to delete program focus item" });
   }
 });
 
